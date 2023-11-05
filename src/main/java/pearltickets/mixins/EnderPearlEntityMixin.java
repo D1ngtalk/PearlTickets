@@ -5,10 +5,7 @@ import net.minecraft.entity.EntityType;
 import net.minecraft.entity.projectile.thrown.EnderPearlEntity;
 import net.minecraft.entity.projectile.thrown.ThrownItemEntity;
 import net.minecraft.nbt.NbtCompound;
-import net.minecraft.server.world.ChunkHolder;
-import net.minecraft.server.world.ChunkTicketType;
-import net.minecraft.server.world.ServerChunkManager;
-import net.minecraft.server.world.ServerWorld;
+import net.minecraft.server.world.*;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Vec3d;
@@ -23,8 +20,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 // Java
-import java.io.IOException;
 import java.util.Comparator;
+import java.util.concurrent.ExecutionException;
 
 
 @Mixin(EnderPearlEntity.class)
@@ -41,7 +38,7 @@ public abstract class EnderPearlEntityMixin extends ThrownItemEntity {
     }
 
     private static boolean isEntityTickingChunk(WorldChunk chunk) {
-        return (chunk != null && chunk.getLevelType() == ChunkHolder.LevelType.ENTITY_TICKING);
+        return (chunk != null && chunk.getLevelType() == ChunkLevelType.ENTITY_TICKING);
     }
 
     private static int getHighestMotionBlockingY(NbtCompound nbtCompound) {
@@ -51,7 +48,7 @@ public abstract class EnderPearlEntityMixin extends ThrownItemEntity {
             for (long element : nbtCompound.getCompound("Heightmaps").getLongArray("MOTION_BLOCKING")) {
                 // 64 bits in long, 7 y-values * 9-bit-each = 63 bits, and 1 bit vacant.
                 for (int i = 0; i < 7; i++) {
-                    int y = (int)(element & 0b111111111) - 1;
+                    int y = (int) (element & 0b111111111) - 1;
                     if (y > highestY) highestY = y;
                     element = element >> 9;
                 }
@@ -82,8 +79,8 @@ public abstract class EnderPearlEntityMixin extends ThrownItemEntity {
 //            System.out.println("next: " + nextPos + nextVelocity);
 
             // chunkPos to temporarily store pearl and next chunkPos to check chunk loading
-            ChunkPos currChunkPos = new ChunkPos(new BlockPos(currPos));
-            ChunkPos nextChunkPos = new ChunkPos(new BlockPos(nextPos));
+            ChunkPos currChunkPos = new ChunkPos(new BlockPos((int) currPos.x, (int) currPos.y, (int) currPos.z));
+            ChunkPos nextChunkPos = new ChunkPos(new BlockPos((int) nextPos.x, (int) nextPos.y, (int) nextPos.z));
 
 //            System.out.printf("currChunkPos: (%d, %d)    realChunkPos: (%d, %d)    nextChunkPos: (%d, %d)\n",
 //                 currChunkPos.x, currChunkPos.z, realChunkPos.x, realChunkPos.z, nextChunkPos.x, nextChunkPos.z);
@@ -91,21 +88,22 @@ public abstract class EnderPearlEntityMixin extends ThrownItemEntity {
             // chunk loading
             ServerChunkManager serverChunkManager = ((ServerWorld) world).getChunkManager();
             if (!this.sync || !isEntityTickingChunk(serverChunkManager.getWorldChunk(nextChunkPos.x, nextChunkPos.z))) {
-                int highestMotionBlockingY = Integer.MIN_VALUE;
+                NbtCompound nbtCompound1;
+                NbtCompound nbtCompound2;
                 try {
-                    highestMotionBlockingY = Integer.max(
-                        getHighestMotionBlockingY(serverChunkManager.threadedAnvilChunkStorage.getNbt(currChunkPos)),
-                        getHighestMotionBlockingY(serverChunkManager.threadedAnvilChunkStorage.getNbt(nextChunkPos)));
-                } catch (IOException e) {
-                    System.out.println("getNbt IOException");
-                    e.printStackTrace();
+                    nbtCompound1 = serverChunkManager.threadedAnvilChunkStorage.getNbt(currChunkPos).get().orElse(null);
+                    nbtCompound2 = serverChunkManager.threadedAnvilChunkStorage.getNbt(nextChunkPos).get().orElse(null);
+                } catch (InterruptedException | ExecutionException e) {
+                    throw new RuntimeException("NbtCompound exception");
                 }
+
+                int highestMotionBlockingY = Integer.max(getHighestMotionBlockingY(nbtCompound1), getHighestMotionBlockingY(nbtCompound2));
 
 //                System.out.println(this.realPos.y + " " + highestMotionBlockingY + " " + nextPos.y);
 
                 // compatible with none-zero minimum y value dimension
                 DimensionType worldDimension = world.getDimension();
-                highestMotionBlockingY += worldDimension.getMinimumY();
+                highestMotionBlockingY += worldDimension.minY();
 
                 // skip chunk loading
                 if (this.realPos.y > highestMotionBlockingY
@@ -130,5 +128,4 @@ public abstract class EnderPearlEntityMixin extends ThrownItemEntity {
             this.realVelocity = nextVelocity;
         }
     }
-
 }
